@@ -1,0 +1,84 @@
+Cursor project rules for document-reader-mcp (Oct 2025)
+
+Purpose
+- Establish consistent development rules for this repository when using Cursor.
+- Optimize for security, maintainability, and developer experience.
+
+Assistant behavior
+- Default to concise answers; expand only when asked.
+- Before large refactors or breaking changes, propose a short plan and ask for confirmation.
+- Prefer minimal, targeted edits. Preserve existing indentation style and width. Do not reformat unrelated code.
+- Always add missing imports/exports and keep code type-safe. Avoid unsafe casts or any-typed surfaces.
+- Use guard clauses over deep nesting. Avoid unnecessary try/catch; never swallow errors.
+- For new code, choose clarity over cleverness; write high-verbosity, readable code with descriptive names.
+
+Research and external knowledge
+- For web research or best-practices questions, prefer the Perplexity Sonar MCP server.
+- Always set a system role appropriate to the task (e.g., “senior DevOps engineer”, “MCP expert”, “applied research engineer”).
+- Cite authoritative sources with links. Highlight critical items and security concerns.
+
+Security and privacy
+- Never commit secrets or credentials. Use secret managers (GitHub Encrypted Secrets for CI; SOPS/age or cloud secret stores for config).
+- Strip/redact sensitive data in logs and error messages. Do not include secrets in telemetry.
+- Default to least-privilege access in code, CI, and cloud roles.
+
+Git and reviews
+- Use Conventional Commits for messages (feat:, fix:, docs:, chore:, refactor:, test:, ci:, build:, perf:).
+- Require signed commits and signed tags for releases where supported.
+- All changes go through PRs with passing checks (build, lint, tests, security scans) before merge.
+
+Testing
+- For non-trivial changes, include or update unit tests. Add integration/E2E tests when behavior spans boundaries (I/O, network, persistent stores).
+- Aim for fast, deterministic tests. Favor hermetic tests with clear fixtures.
+
+Formatting and linting
+- Respect the project’s existing linters/formatters. Do not mix indentation styles or change unrelated formatting.
+- If missing, prefer: EditorConfig for basics; language-standard tools (e.g., ESLint+Prettier for TS, Ruff/Black for Python). Enforce via pre-commit and CI.
+
+Architecture and code style
+- Name functions as verb phrases and variables as clear nouns. Avoid cryptic abbreviations.
+- Prefer pure functions for logic; isolate I/O at boundaries. Inject dependencies for testability.
+- Avoid deep nesting; split complex logic into smaller functions.
+
+MCP server guidelines
+- Structure
+  - Separate layers: transport/API, validation, authz/authn, domain logic, tool adapters, and persistence.
+  - Keep adapters pluggable and stateless; pass context explicitly.
+- Configuration
+  - Use environment variables for config; no secrets in code. Document required vars.
+- Authentication/authorization
+  - Support API keys and/or OAuth with short-lived tokens. Scope service accounts narrowly.
+- Quotas and rate limiting
+  - Enforce per-user/key budgets; handle 429 responses with backoff.
+- Validation
+  - Validate requests/responses against schemas; reject out-of-spec traffic.
+- Streaming
+  - Support streaming for long operations; implement backpressure.
+- Reliability
+  - Use idempotency keys for mutating operations. Retry with exponential backoff and jitter for transient failures.
+- Observability
+  - Use structured logs with correlation IDs. Instrument with OpenTelemetry where applicable.
+- Versioning and compatibility
+  - Version public APIs; provide deprecation windows for breaking changes.
+
+Perplexity Sonar integration rules
+- Use models appropriate to task complexity (e.g., Sonar Pro for deep, citation-heavy research).
+- Default temperature to 0–0.3 for deterministic, factual outputs.
+- Require citations with answers; surface them clearly. Warn when citations are insufficient.
+- Apply timeouts and retries with exponential backoff. Handle 429s and 5xx robustly.
+- Cache deterministic queries where allowed; include freshness timestamps.
+- Respect API ToS and data usage limits. Never expose API keys in client code.
+
+Performance and scalability
+- Avoid N+1 network or database calls. Batch where practical. Stream results when beneficial.
+- Prefer incremental computation and caching for expensive operations.
+
+When to ask first
+- Repository-wide refactors, dependency upgrades impacting many modules, build/CI changes, or any change that may affect release processes.
+
+Contributor experience
+- Keep README and CONTRIBUTING up to date with setup, scripts, and workflows.
+- Prefer dev containers or reproducible env tooling when practical; document bootstrap steps.
+
+Conflict resolution
+- If rules conflict with existing code or configs, prefer existing local conventions and call out the conflict in the PR description.

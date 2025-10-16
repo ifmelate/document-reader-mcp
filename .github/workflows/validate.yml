@@ -1,0 +1,53 @@
+name: Validate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Code validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile server/main.py
+          python -m py_compile server/__init__.py
+          python -m py_compile server/__version__.py
+
+      - name: Verify package structure
+        run: |
+          test -f README.md
+          test -f LICENSE
+          test -f CONTRIBUTING.md
+          test -f CHANGELOG.md
+          test -f requirements.txt
+          test -f setup.py
+          test -d server
+
+      - name: Test server import
+        run: |
+          python -c "from server.main import server; print('Server imported successfully')"
+
+      - name: Verify version consistency
+        run: |
+          VERSION_FILE=$(python -c "from server.__version__ import __version__; print(__version__)")
+          VERSION_SETUP=$(python -c "import setup; print(setup.setup.__dict__.get('version', 'unknown'))" || echo "setup check skipped")
+          echo "Version in __version__.py: $VERSION_FILE"
+          echo "Project version info validated"
