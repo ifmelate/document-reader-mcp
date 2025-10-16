@@ -1,4 +1,4 @@
-Cursor project rules for document-reader-mcp (Oct 2025)
+Cursor project rules for document-reader-mcp
 
 Purpose
 - Establish consistent development rules for this repository when using Cursor.
@@ -82,3 +82,4 @@ Contributor experience
 
 Conflict resolution
 - If rules conflict with existing code or configs, prefer existing local conventions and call out the conflict in the PR description.
+

@@ -24,13 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Row limits for CSV and Excel files
 - Comprehensive error handling and validation
 - MCP tool implementations using FastMCP
+- Docker support with Dockerfile and .dockerignore
 - Documentation and usage examples
+- GitHub issue templates and workflows
 
 ### Security
 - Process-wide rate limiting to prevent abuse
 - File size validation
 - Path expansion with security considerations
 - Safe error messages without exposing sensitive data
+- Docker container runs as non-root user (UID 1000)
+- Read-only volume mounts for document directories
 
 [1.0.0]: https://github.com/ifmelate/document-reader-mcp/releases/tag/v1.0.0
 

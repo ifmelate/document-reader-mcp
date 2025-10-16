@@ -24,6 +24,7 @@ Universal MCP server for extracting text from various document formats. Supports
 ✅ **Streaming API**: Memory-efficient processing of large files  
 ✅ **Smart encoding detection**: Handles UTF-8, Latin-1, CP1252, ISO-8859-1  
 ✅ **Rate limiting**: Process-wide rate limiting (configurable)  
+✅ **Docker support**: Run in isolated container with non-root user  
 ✅ **Modular design**: Easy to extend with new formats  
 ✅ **Minimal dependencies**: Most formats use Python stdlib only
 
@@ -47,6 +48,19 @@ pip install -r requirements.txt
 ```bash
 pip install git+https://github.com/ifmelate/document-reader-mcp.git
 ```
+
+### Option 3: Docker
+
+```bash
+# Clone the repository
+git clone https://github.com/ifmelate/document-reader-mcp.git
+cd document-reader-mcp
+
+# Build the Docker image
+docker build -t document-reader-mcp:latest .
+```
+
+See [Docker Configuration](#docker-configuration) below for MCP client setup.
 
 ### Running the Server
 
@@ -81,6 +95,82 @@ Replace `/absolute/path/to/document-reader-mcp` with the actual path where you c
 ### For Claude Desktop or other MCP clients
 
 Add similar configuration to your client's MCP settings file, adjusting the path accordingly.
+
+### Docker Configuration
+
+To use the Docker version with MCP clients:
+
+```json
+{
+  "mcpServers": {
+    "document-reader": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v", "/absolute/path/to/documents:/documents:ro",
+        "document-reader-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+**Important notes:**
+- Replace `/absolute/path/to/documents` with the directory containing files you want to process
+- The `-v` flag mounts your documents directory as `/documents` in the container (read-only)
+- Use `-i` for interactive mode (required for stdio communication)
+- Use `--rm` to automatically remove the container after it stops
+- File paths in MCP tool calls should use `/documents/filename.pdf` format
+
+**Multiple volume mounts:**
+
+If you need to access files from multiple directories:
+
+```json
+{
+  "mcpServers": {
+    "document-reader": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v", "/Users/you/Documents:/documents:ro",
+        "-v", "/Users/you/Downloads:/downloads:ro",
+        "document-reader-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+**Custom rate limiting:**
+
+```json
+{
+  "mcpServers": {
+    "document-reader": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-e", "DOC_READER_RATE_LIMIT_PER_MINUTE=120",
+        "-v", "/absolute/path/to/documents:/documents:ro",
+        "document-reader-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+**Security considerations for Docker:**
+- The container runs as non-root user (UID 1000)
+- Volumes are mounted read-only (`:ro`) for safety
+- No network ports are exposed
+- Container has minimal attack surface
 
 ## Available Tools
 
