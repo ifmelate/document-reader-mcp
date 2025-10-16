@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import asyncio
 import csv
@@ -9,7 +10,13 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from server.__version__ import __version__
+# Handle both package import and direct script execution
+try:
+    from .__version__ import __version__
+except ImportError:
+    # Add parent directory to path for direct script execution
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from server.__version__ import __version__
 
 try:
     from pdfminer.high_level import extract_text as pdf_extract_text

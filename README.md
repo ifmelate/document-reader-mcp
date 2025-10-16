@@ -3,8 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/ifmelate/document-reader-mcp/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/ifmelate/document-reader-mcp)
 
 Universal MCP server for extracting text from various document formats. Supports streaming, page/row limits, encoding detection, and simple rate limiting.
+
+**Cross-platform compatible**: Works seamlessly on macOS, Linux, and Windows with identical functionality.
 
 ## Supported Formats
 
@@ -20,6 +23,7 @@ Universal MCP server for extracting text from various document formats. Supports
 
 ## Features
 
+✅ **Cross-platform**: Works on macOS, Linux, and Windows  
 ✅ **Multiple format support**: PDF, Excel, CSV, TXT, JSON, Markdown, DOCX  
 ✅ **Streaming API**: Memory-efficient processing of large files  
 ✅ **Smart encoding detection**: Handles UTF-8, Latin-1, CP1252, ISO-8859-1  
@@ -32,6 +36,8 @@ Universal MCP server for extracting text from various document formats. Supports
 
 ### Option 1: Install from GitHub (Recommended)
 
+#### macOS/Linux
+
 ```bash
 # Clone the repository
 git clone https://github.com/ifmelate/document-reader-mcp.git
@@ -39,9 +45,62 @@ cd document-reader-mcp
 
 # Create virtual environment and install dependencies
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+#### Windows (Command Prompt)
+
+```cmd
+# Clone the repository
+git clone https://github.com/ifmelate/document-reader-mcp.git
+cd document-reader-mcp
+
+# Create virtual environment and install dependencies
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+```
+
+#### Windows (PowerShell)
+
+```powershell
+# Clone the repository
+git clone https://github.com/ifmelate/document-reader-mcp.git
+cd document-reader-mcp
+
+# Create virtual environment and install dependencies
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+**Note for Windows PowerShell users**: If you encounter an execution policy error, run:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Quick Setup Scripts
+
+For convenience, you can use the provided setup scripts:
+
+**macOS/Linux:**
+```bash
+chmod +x dev-setup.sh
+./dev-setup.sh
+```
+
+**Windows (Command Prompt):**
+```cmd
+dev-setup.bat
+```
+
+**Windows (PowerShell):**
+```powershell
+.\dev-setup.ps1
+```
+
+These scripts will create the virtual environment, install dependencies, and set up the development environment automatically.
 
 ### Option 2: Direct Install with pip
 
@@ -76,7 +135,11 @@ The server runs over stdio for integration with MCP-compatible clients.
 
 ### For Cursor IDE
 
-Add this configuration to your Cursor MCP settings (usually in `~/.cursor/mcp.json` or via Settings → MCP):
+Add this configuration to your Cursor MCP settings:
+- **macOS/Linux**: `~/.cursor/mcp.json`
+- **Windows**: `%APPDATA%\Cursor\User\globalStorage\mcp.json` or via Settings → MCP
+
+#### macOS/Linux Configuration
 
 ```json
 {
@@ -90,7 +153,24 @@ Add this configuration to your Cursor MCP settings (usually in `~/.cursor/mcp.js
 }
 ```
 
-Replace `/absolute/path/to/document-reader-mcp` with the actual path where you cloned the repository.
+#### Windows Configuration
+
+```json
+{
+  "mcpServers": {
+    "document-reader": {
+      "command": "python",
+      "args": ["-m", "server.main"],
+      "cwd": "C:\\Users\\YourUsername\\document-reader-mcp"
+    }
+  }
+}
+```
+
+**Important for Windows users**:
+- Use double backslashes (`\\`) in JSON paths, or use forward slashes (`/`) which also work on Windows
+- Replace `YourUsername` with your actual Windows username
+- Ensure the `python` command points to your Python 3.10+ installation (check with `python --version`)
 
 ### For Claude Desktop or other MCP clients
 
@@ -301,6 +381,39 @@ Text-based formats (CSV, TXT, JSON, Markdown) automatically try multiple encodin
 
 ### Missing dependency errors
 - If you see "X is not installed" errors, reinstall dependencies: `pip install -r requirements.txt`
+
+### Windows-specific issues
+
+#### PowerShell execution policy error
+If you see `cannot be loaded because running scripts is disabled`:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Path length limitations (Windows)
+Windows has a 260-character path limit by default. For long paths:
+1. Enable long path support in Windows 10/11: [Microsoft Docs](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+2. Or move the repository to a shorter path (e.g., `C:\mcp\document-reader`)
+
+#### Python not found on Windows
+- Ensure Python 3.10+ is installed and added to PATH
+- Verify with: `python --version`
+- If `python` doesn't work, try `py` or `python3`
+
+#### Virtual environment activation issues on Windows
+- Command Prompt: Use `.venv\Scripts\activate.bat`
+- PowerShell: Use `.venv\Scripts\Activate.ps1`
+- Git Bash: Use `source .venv/Scripts/activate`
+
+### Docker-related issues
+
+#### Docker not running
+- Ensure Docker Desktop is installed and running
+- On Windows, Docker Desktop requires WSL 2
+
+#### Permission errors with Docker volumes
+- On Windows, ensure the drive is shared in Docker Desktop settings
+- Right-click Docker Desktop icon → Settings → Resources → File Sharing
 
 ## Contributing
 
