@@ -24,9 +24,11 @@ Universal MCP server for extracting text from various document formats. Supports
 ## Features
 
 ✅ **Cross-platform**: Works on macOS, Linux, and Windows  
-✅ **Multiple format support**: PDF, Excel, CSV, TXT, JSON, Markdown, DOCX  
+✅ **Multiple format support**: PDF, Excel, CSV, TXT, JSON, Markdown, DOCX, PowerPoint, HTML  
+✅ **Markdown conversion**: Convert documents to Markdown with automatic image extraction  
 ✅ **Streaming API**: Memory-efficient processing of large files  
 ✅ **Smart encoding detection**: Handles UTF-8, Latin-1, CP1252, ISO-8859-1  
+✅ **Context-aware limits**: Automatic truncation to prevent AI context overflow  
 ✅ **Rate limiting**: Process-wide rate limiting (configurable)  
 ✅ **Docker support**: Run in isolated container with non-root user  
 ✅ **Modular design**: Easy to extend with new formats  
@@ -262,14 +264,19 @@ Extract complete text from a document file.
 
 **Parameters:**
 - `path` (string, required): Absolute or relative path to the document
-- `max_pages` (int, optional): For PDFs, parse only the first N pages
-- `max_rows` (int, optional): For CSV/Excel, parse only N data rows
+- `max_pages` (int, optional): For PDFs, parse only the first N pages (default: 50, set to 0 to disable)
+- `max_rows` (int, optional): For CSV/Excel, parse only N data rows (default: 500, set to 0 to disable)
 
-**Returns:** Extracted text as string
+**Returns:** Extracted text as string (automatically truncated at 100,000 characters by default)
 
 **Supported formats:** `.pdf`, `.xlsx`, `.xlsm`, `.csv`, `.txt`, `.json`, `.md`, `.docx`
 
 **Note:** For large files, use `extract_text_from_file_stream` instead to avoid memory issues.
+
+**Default Limits:** To prevent AI context overflow, the tool applies sensible defaults:
+- PDFs: First 50 pages
+- Excel/CSV: First 500 rows
+- All formats: 100,000 character output limit
 
 ### Tool: `extract_text_from_file_stream`
 
@@ -277,13 +284,60 @@ Stream text chunks from a document (memory-efficient for large files).
 
 **Parameters:**
 - `path` (string, required): Absolute or relative path to the document
-- `max_pages` (int, optional): For PDFs, page cap
-- `max_rows` (int, optional): For CSV/Excel, row cap
+- `max_pages` (int, optional): For PDFs, page cap (default: 50, set to 0 to disable)
+- `max_rows` (int, optional): For CSV/Excel, row cap (default: 500, set to 0 to disable)
 - `chunk_size` (int, optional): Characters per chunk (default: 4096, min: 512)
 
 **Yields:** Text chunks as strings
 
 **Supported formats:** All formats from `extract_text_from_file`
+
+### Tool: `convert_to_markdown`
+
+Convert various document formats to Markdown, extracting and saving images when applicable.
+
+**⚠️ Important**: This tool converts the **ENTIRE document** and saves it to a file. It **ignores** the `DOC_READER_DEFAULT_MAX_ROWS`, `DOC_READER_DEFAULT_MAX_PAGES`, and `DOC_READER_MAX_OUTPUT_CHARS` environment variables. Only the preview returned to the AI is limited to protect context - the saved file contains the complete document.
+
+**Parameters:**
+- `path` (string, required): Absolute or relative path to the file to convert
+- `output_dir` (string, optional): Directory where the markdown file and images will be saved. If not specified, saves in the same directory as the source file
+- `output_filename` (string, optional): Name for the output markdown file (without extension). If not specified, uses the source filename with .md extension
+
+**Returns:** Dictionary containing:
+- `markdown_path`: Path to the saved markdown file (contains FULL content, not truncated)
+- `images_dir`: Path to the directory containing extracted images (if any)
+- `image_count`: Number of images extracted
+- `markdown_preview`: First 500 characters preview (truncated for AI context protection)
+- `file_size_chars`: Total character count of the saved markdown file
+- `status`: "success" or error status
+- `message`: Human-readable status message
+
+**Supported formats:**
+- PDF (`.pdf`) - with image extraction
+- Excel (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`) - converted to markdown tables
+- Word (`.docx`) - with image extraction
+- CSV (`.csv`) - converted to markdown tables
+- PowerPoint (`.pptx`) - text and images
+- HTML (`.html`, `.htm`)
+- Plain text (`.txt`, `.log`)
+- Images (`.jpg`, `.jpeg`, `.png`) - with OCR if available
+
+**Example Usage:**
+```python
+# Convert a Word document with images
+result = convert_to_markdown(
+    path="/path/to/document.docx",
+    output_dir="/path/to/output"
+)
+# Creates: /path/to/output/document.md
+#          /path/to/output/document_images/image_1.png
+#          /path/to/output/document_images/image_2.png
+```
+
+**Important Notes:**
+- **Full file is saved**: The complete markdown file is saved to disk without any truncation, regardless of size
+- **Preview is truncated**: Only the preview returned to the AI is limited to 500 characters to protect context
+- **Images**: Automatically extracted from supported formats and saved in a `{filename}_images/` subdirectory, with markdown using relative paths to reference them
 
 ## Usage Examples
 
@@ -301,34 +355,72 @@ Read the CSV file data.csv and show me the first 10 rows
 What's in the JSON file config.json?
 ```
 
+```
+Convert the Word document ~/Documents/proposal.docx to Markdown and save it in ~/Documents/markdown/
+```
+
+```
+Convert this Excel file to Markdown: ~/data/sales_report.xlsx
+```
+
 ### Programmatic Usage:
 
 ```python
-# Via MCP client
+# Via MCP client - Extract text
 result = await client.call_tool("extract_text_from_file", {
     "path": "/path/to/document.pdf",
     "max_pages": 5
 })
 
-# Streaming
+# Streaming large files
 async for chunk in client.stream_tool("extract_text_from_file_stream", {
     "path": "/path/to/large_file.csv",
     "chunk_size": 8192
 }):
     print(chunk)
+
+# Convert to Markdown
+result = await client.call_tool("convert_to_markdown", {
+    "path": "/path/to/document.docx",
+    "output_dir": "/path/to/output",
+    "output_filename": "converted_document"
+})
+print(f"Markdown saved to: {result['markdown_path']}")
+print(f"Images extracted: {result['image_count']}")
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-- `DOC_READER_RATE_LIMIT_PER_MINUTE`: Maximum tool calls per minute (default: 60)
+Configure the server behavior using these environment variables:
 
-Example:
+- `DOC_READER_RATE_LIMIT_PER_MINUTE`: Maximum tool calls per minute (default: 60)
+  - **Applies to**: All tools
+  
+- `DOC_READER_MAX_OUTPUT_CHARS`: Maximum output text size in characters (default: 100000)
+  - **Applies to**: `extract_text_from_file` and `extract_text_from_file_stream` only
+  - **Does NOT apply to**: `convert_to_markdown` (saves full file, only preview is limited)
+  
+- `DOC_READER_DEFAULT_MAX_ROWS`: Default maximum rows for spreadsheets/CSV (default: 500, set to 0 to disable)
+  - **Applies to**: `extract_text_from_file` and `extract_text_from_file_stream` only
+  - **Does NOT apply to**: `convert_to_markdown` (converts entire document)
+  
+- `DOC_READER_DEFAULT_MAX_PAGES`: Default maximum pages for PDFs (default: 50, set to 0 to disable)
+  - **Applies to**: `extract_text_from_file` and `extract_text_from_file_stream` only
+  - **Does NOT apply to**: `convert_to_markdown` (converts entire document)
+
+**Example:**
 ```bash
 export DOC_READER_RATE_LIMIT_PER_MINUTE=120
+export DOC_READER_MAX_OUTPUT_CHARS=200000
+export DOC_READER_DEFAULT_MAX_ROWS=1000
+export DOC_READER_DEFAULT_MAX_PAGES=100
 python -m server.main
 ```
+
+**Why these limits?** 
+Large documents can easily exceed AI model context windows (typically 200K-1M tokens). These defaults prevent context overflow while allowing flexibility for specific use cases. When limits are hit, the tool provides clear warnings with instructions on how to adjust them.
 
 ## Technical Details
 
@@ -353,6 +445,7 @@ Text-based formats (CSV, TXT, JSON, Markdown) automatically try multiple encodin
 | TXT | File I/O (stdlib) | Built-in |
 | JSON | `json` (stdlib) | Built-in |
 | Markdown | File I/O (stdlib) | Built-in |
+| **Conversion** | `markitdown` | Included |
 
 ## Security Considerations
 
