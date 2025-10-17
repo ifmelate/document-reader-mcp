@@ -38,6 +38,11 @@ try:
 except Exception:  # pragma: no cover
     markdown = None
 
+try:
+    from markitdown import MarkItDown
+except Exception:  # pragma: no cover
+    MarkItDown = None
+
 
 server = FastMCP("document-reader-mcp")
 
@@ -72,10 +77,62 @@ except ValueError:
 
 _rate_limiter = SimpleRateLimiter(max_calls=_rate_limit_per_minute, window_seconds=60)
 
+# Maximum output text size in characters (to prevent context overflow)
+_max_output_chars_env = os.getenv("DOC_READER_MAX_OUTPUT_CHARS", "100000")
+try:
+    _max_output_chars = max(1000, int(_max_output_chars_env))
+except ValueError:
+    _max_output_chars = 100000
+
+# Default maximum rows for spreadsheets/CSV (0 means use max_output_chars limit only)
+_default_max_rows_env = os.getenv("DOC_READER_DEFAULT_MAX_ROWS", "500")
+try:
+    _default_max_rows = max(0, int(_default_max_rows_env))
+except ValueError:
+    _default_max_rows = 500
+
+# Default maximum pages for PDFs (0 means use max_output_chars limit only)
+_default_max_pages_env = os.getenv("DOC_READER_DEFAULT_MAX_PAGES", "50")
+try:
+    _default_max_pages = max(0, int(_default_max_pages_env))
+except ValueError:
+    _default_max_pages = 50
+
 
 def _enforce_rate_limit() -> None:
     if not _rate_limiter.allow():
         raise RuntimeError("Rate limit exceeded. Try again later or increase limits in configuration.")
+
+
+def _truncate_output_if_needed(text: str, truncated_rows: bool = False, file_path: str = "") -> str:
+    """Truncate output text if it exceeds maximum character limit and add warning."""
+    if len(text) <= _max_output_chars:
+        return text
+    
+    truncation_point = _max_output_chars
+    # Try to truncate at a line boundary for cleaner output
+    last_newline = text.rfind("\n", 0, _max_output_chars)
+    if last_newline > _max_output_chars - 1000:  # Within reasonable distance
+        truncation_point = last_newline
+    
+    truncated_text = text[:truncation_point]
+    
+    warning_msg = (
+        f"\n\n[TRUNCATED: Output exceeded {_max_output_chars:,} character limit. "
+        f"Original size: {len(text):,} characters. "
+    )
+    
+    if file_path:
+        warning_msg += f"File: {os.path.basename(file_path)}. "
+    
+    if truncated_rows:
+        warning_msg += "Consider using max_rows or max_pages parameter to limit input. "
+    
+    warning_msg += (
+        f"To increase limit, set DOC_READER_MAX_OUTPUT_CHARS environment variable.]"
+    )
+    
+    return truncated_text + warning_msg
 
 
 def _extract_text_from_pdf(path: str, max_pages: Optional[int] = None) -> str:
@@ -84,9 +141,18 @@ def _extract_text_from_pdf(path: str, max_pages: Optional[int] = None) -> str:
             "pdfminer.six is not installed. To process PDF files, install it with: "
             "pip install pdfminer.six"
         )
+    
+    # Apply default page limit if none specified
+    effective_max_pages = max_pages if max_pages is not None else _default_max_pages
+    
     # Use pdfminer's maxpages to avoid parsing the whole file when limited
-    maxpages_arg = 0 if not max_pages or max_pages <= 0 else int(max_pages)
-    return pdf_extract_text(path, maxpages=maxpages_arg)
+    maxpages_arg = 0 if effective_max_pages <= 0 else int(effective_max_pages)
+    text = pdf_extract_text(path, maxpages=maxpages_arg)
+    
+    if effective_max_pages > 0:
+        text += f"\n\n[INFO: Page limit of {effective_max_pages} applied. Use max_pages parameter to adjust.]"
+    
+    return _truncate_output_if_needed(text, truncated_rows=True, file_path=path)
 
 
 def _extract_text_from_xlsx(path: str, max_rows: Optional[int] = None) -> str:
@@ -95,10 +161,16 @@ def _extract_text_from_xlsx(path: str, max_rows: Optional[int] = None) -> str:
             "openpyxl is not installed. To process Excel files, install it with: "
             "pip install openpyxl"
         )
+    
+    # Apply default row limit if none specified
+    effective_max_rows = max_rows if max_rows is not None else _default_max_rows
+    
     workbook = load_workbook(filename=path, data_only=True, read_only=True)
     try:
         lines: list[str] = []
         rows_emitted = 0
+        hit_row_limit = False
+        
         for sheet in workbook.worksheets:
             lines.append(f"# Sheet: {sheet.title}")
             for row in sheet.iter_rows(values_only=True):
@@ -107,18 +179,31 @@ def _extract_text_from_xlsx(path: str, max_rows: Optional[int] = None) -> str:
                 if line:
                     lines.append(line)
                     rows_emitted += 1
-                    if max_rows is not None and max_rows > 0 and rows_emitted >= max_rows:
-                        return "\n".join(lines).strip()
+                    if effective_max_rows > 0 and rows_emitted >= effective_max_rows:
+                        hit_row_limit = True
+                        break
+            if hit_row_limit:
+                break
             lines.append("")
-        return "\n".join(lines).strip()
+        
+        result = "\n".join(lines).strip()
+        
+        if hit_row_limit:
+            result += f"\n\n[INFO: Row limit of {effective_max_rows} reached. Use max_rows parameter to adjust.]"
+        
+        return _truncate_output_if_needed(result, truncated_rows=True, file_path=path)
     finally:
         workbook.close()
 
 
 def _extract_text_from_csv(path: str, max_rows: Optional[int] = None) -> str:
     """Extract text from CSV file using Python's built-in csv module."""
+    # Apply default row limit if none specified
+    effective_max_rows = max_rows if max_rows is not None else _default_max_rows
+    
     lines: list[str] = []
     rows_read = 0
+    hit_row_limit = False
     
     # Try different encodings to handle various CSV files
     encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
@@ -132,9 +217,16 @@ def _extract_text_from_csv(path: str, max_rows: Optional[int] = None) -> str:
                     if line:
                         lines.append(line)
                         rows_read += 1
-                        if max_rows is not None and max_rows > 0 and rows_read >= max_rows:
+                        if effective_max_rows > 0 and rows_read >= effective_max_rows:
+                            hit_row_limit = True
                             break
-            return "\n".join(lines).strip()
+            
+            result = "\n".join(lines).strip()
+            
+            if hit_row_limit:
+                result += f"\n\n[INFO: Row limit of {effective_max_rows} reached. Use max_rows parameter to adjust.]"
+            
+            return _truncate_output_if_needed(result, truncated_rows=True, file_path=path)
         except (UnicodeDecodeError, UnicodeError):
             continue
         except Exception as e:
@@ -144,7 +236,10 @@ def _extract_text_from_csv(path: str, max_rows: Optional[int] = None) -> str:
     if not lines:
         raise RuntimeError("Failed to decode CSV file with any supported encoding")
     
-    return "\n".join(lines).strip()
+    result = "\n".join(lines).strip()
+    if hit_row_limit:
+        result += f"\n\n[INFO: Row limit of {effective_max_rows} reached. Use max_rows parameter to adjust.]"
+    return _truncate_output_if_needed(result, truncated_rows=True, file_path=path)
 
 
 def _extract_text_from_txt(path: str) -> str:
@@ -154,7 +249,8 @@ def _extract_text_from_txt(path: str) -> str:
     for encoding in encodings:
         try:
             with open(path, 'r', encoding=encoding) as f:
-                return f.read()
+                text = f.read()
+                return _truncate_output_if_needed(text, truncated_rows=False, file_path=path)
         except (UnicodeDecodeError, UnicodeError):
             continue
         except Exception as e:
@@ -172,7 +268,8 @@ def _extract_text_from_json(path: str) -> str:
         try:
             with open(path, 'r', encoding=encoding) as f:
                 data = json.load(f)
-                return json.dumps(data, indent=2, ensure_ascii=False)
+                text = json.dumps(data, indent=2, ensure_ascii=False)
+                return _truncate_output_if_needed(text, truncated_rows=False, file_path=path)
         except (UnicodeDecodeError, UnicodeError):
             continue
         except json.JSONDecodeError as e:
@@ -195,7 +292,7 @@ def _extract_text_from_markdown(path: str) -> str:
                 
             # If markdown library is available, optionally convert to HTML
             # For simplicity, return plain markdown text
-            return md_content
+            return _truncate_output_if_needed(md_content, truncated_rows=False, file_path=path)
         except (UnicodeDecodeError, UnicodeError):
             continue
         except Exception as e:
@@ -216,7 +313,8 @@ def _extract_text_from_docx(path: str) -> str:
     try:
         doc = docx.Document(path)
         paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
-        return "\n".join(paragraphs)
+        text = "\n".join(paragraphs)
+        return _truncate_output_if_needed(text, truncated_rows=False, file_path=path)
     except Exception as e:
         raise RuntimeError(f"Failed to extract text from DOCX: {e}") from e
 
@@ -241,13 +339,16 @@ def extract_text_from_file(
 
     Args:
         path: Absolute or relative file path on the local machine.
-        max_pages: For PDFs, parse only the first N pages (0 or None means no explicit
-            page cap).
-        max_rows: For spreadsheets and CSV, parse only N data rows across all sheets (0 or
-            None means no explicit row cap).
+        max_pages: For PDFs, parse only the first N pages. If not specified, defaults to 50 pages.
+            Set to 0 to disable page limit (not recommended for large files).
+        max_rows: For spreadsheets and CSV, parse only N data rows across all sheets. 
+            If not specified, defaults to 500 rows. Set to 0 to disable row limit 
+            (not recommended for large files).
 
     Returns:
-        Extracted plain text as a string.
+        Extracted plain text as a string. Output is automatically truncated at 100,000 
+        characters by default to prevent context overflow. Set DOC_READER_MAX_OUTPUT_CHARS 
+        environment variable to adjust this limit.
     """
     _enforce_rate_limit()
     if not path or not isinstance(path, str):
@@ -302,13 +403,17 @@ async def extract_text_from_file_stream(
 
     Args:
         path: Absolute or relative file path on the local machine.
-        max_pages: For PDFs, page cap for parsing (0 or None means no explicit cap).
-        max_rows: For spreadsheets and CSV, row cap across all sheets (0 or None means no explicit cap).
+        max_pages: For PDFs, parse only the first N pages. If not specified, defaults to 50 pages.
+            Set to 0 to disable page limit (not recommended for large files).
+        max_rows: For spreadsheets and CSV, parse only N data rows across all sheets. 
+            If not specified, defaults to 500 rows. Set to 0 to disable row limit 
+            (not recommended for large files).
         chunk_size: Approximate maximum characters per streamed chunk. Actual chunk sizes may
             vary slightly.
 
     Yields:
         Text chunks as strings until the entire document (or capped portion) has been sent.
+        Streaming respects the same character limits as non-streaming extraction.
     """
     _enforce_rate_limit()
     if not path or not isinstance(path, str):
@@ -340,15 +445,26 @@ async def extract_text_from_file_stream(
                 "openpyxl is not installed. To process Excel files, install it with: "
                 "pip install openpyxl"
             )
+        
+        # Apply default row limit if none specified
+        effective_max_rows = max_rows if max_rows is not None else _default_max_rows
+        
         workbook = load_workbook(filename=expanded_path, data_only=True, read_only=True)
         try:
             buffer_lines: list[str] = []
             buffer_len = 0
             rows_emitted = 0
+            total_chars_emitted = 0
+            hit_row_limit = False
+            
             for sheet in workbook.worksheets:
                 header = f"# Sheet: {sheet.title}"
                 if buffer_len + len(header) + 1 > chunk_size and buffer_lines:
-                    yield "\n".join(buffer_lines)
+                    chunk_text = "\n".join(buffer_lines)
+                    total_chars_emitted += len(chunk_text)
+                    if total_chars_emitted > _max_output_chars:
+                        break
+                    yield chunk_text
                     buffer_lines = []
                     buffer_len = 0
                     await asyncio.sleep(0)
@@ -361,24 +477,41 @@ async def extract_text_from_file_stream(
                     if not line:
                         continue
                     if buffer_len + len(line) + 1 > chunk_size and buffer_lines:
-                        yield "\n".join(buffer_lines)
+                        chunk_text = "\n".join(buffer_lines)
+                        total_chars_emitted += len(chunk_text)
+                        if total_chars_emitted > _max_output_chars:
+                            break
+                        yield chunk_text
                         buffer_lines = []
                         buffer_len = 0
                         await asyncio.sleep(0)
                     buffer_lines.append(line)
                     buffer_len += len(line) + 1
                     rows_emitted += 1
-                    if max_rows is not None and max_rows > 0 and rows_emitted >= max_rows:
+                    if effective_max_rows > 0 and rows_emitted >= effective_max_rows:
+                        hit_row_limit = True
                         break
-                if max_rows is not None and max_rows > 0 and rows_emitted >= max_rows:
+                if hit_row_limit or total_chars_emitted > _max_output_chars:
                     break
+                    
             if buffer_lines:
-                yield "\n".join(buffer_lines)
+                chunk_text = "\n".join(buffer_lines)
+                total_chars_emitted += len(chunk_text)
+                yield chunk_text
+                
+            # Send info message if limits were hit
+            if hit_row_limit:
+                yield f"\n\n[INFO: Row limit of {effective_max_rows} reached. Use max_rows parameter to adjust.]"
+            if total_chars_emitted > _max_output_chars:
+                yield f"\n\n[TRUNCATED: Output exceeded {_max_output_chars:,} character limit.]"
         finally:
             workbook.close()
             
     elif ext_lower == ".csv":
         # Stream CSV rows with buffering
+        # Apply default row limit if none specified
+        effective_max_rows = max_rows if max_rows is not None else _default_max_rows
+        
         encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
         success = False
         
@@ -387,6 +520,8 @@ async def extract_text_from_file_stream(
                 buffer_lines: list[str] = []
                 buffer_len = 0
                 rows_emitted = 0
+                total_chars_emitted = 0
+                hit_row_limit = False
                 
                 with open(expanded_path, 'r', encoding=encoding, newline='') as f:
                     reader = csv.reader(f)
@@ -395,18 +530,32 @@ async def extract_text_from_file_stream(
                         if not line:
                             continue
                         if buffer_len + len(line) + 1 > chunk_size and buffer_lines:
-                            yield "\n".join(buffer_lines)
+                            chunk_text = "\n".join(buffer_lines)
+                            total_chars_emitted += len(chunk_text)
+                            if total_chars_emitted > _max_output_chars:
+                                break
+                            yield chunk_text
                             buffer_lines = []
                             buffer_len = 0
                             await asyncio.sleep(0)
                         buffer_lines.append(line)
                         buffer_len += len(line) + 1
                         rows_emitted += 1
-                        if max_rows is not None and max_rows > 0 and rows_emitted >= max_rows:
+                        if effective_max_rows > 0 and rows_emitted >= effective_max_rows:
+                            hit_row_limit = True
                             break
                     
                     if buffer_lines:
-                        yield "\n".join(buffer_lines)
+                        chunk_text = "\n".join(buffer_lines)
+                        total_chars_emitted += len(chunk_text)
+                        yield chunk_text
+                        
+                    # Send info message if limits were hit
+                    if hit_row_limit:
+                        yield f"\n\n[INFO: Row limit of {effective_max_rows} reached. Use max_rows parameter to adjust.]"
+                    if total_chars_emitted > _max_output_chars:
+                        yield f"\n\n[TRUNCATED: Output exceeded {_max_output_chars:,} character limit.]"
+                        
                 success = True
                 break
             except (UnicodeDecodeError, UnicodeError):
@@ -422,10 +571,20 @@ async def extract_text_from_file_stream(
         
         for encoding in encodings:
             try:
+                total_chars_emitted = 0
                 with open(expanded_path, 'r', encoding=encoding) as f:
                     while True:
                         chunk = f.read(chunk_size)
                         if not chunk:
+                            break
+                        total_chars_emitted += len(chunk)
+                        if total_chars_emitted > _max_output_chars:
+                            # Truncate the final chunk
+                            chars_over = total_chars_emitted - _max_output_chars
+                            chunk = chunk[:-chars_over] if chars_over < len(chunk) else ""
+                            if chunk:
+                                yield chunk
+                            yield f"\n\n[TRUNCATED: Output exceeded {_max_output_chars:,} character limit.]"
                             break
                         yield chunk
                         await asyncio.sleep(0)
@@ -458,6 +617,174 @@ async def extract_text_from_file_stream(
         )
 
 
+@server.tool
+def convert_to_markdown(
+    path: str,
+    output_dir: Optional[str] = None,
+    output_filename: Optional[str] = None,
+) -> dict:
+    """
+    Convert various document formats to Markdown, extracting images when applicable.
+    
+    **Important**: This tool converts the ENTIRE document and saves it to a file.
+    It ignores the DOC_READER_DEFAULT_MAX_ROWS, DOC_READER_DEFAULT_MAX_PAGES, and 
+    DOC_READER_MAX_OUTPUT_CHARS environment variables. Only the preview returned to 
+    the AI is limited to protect context - the saved file contains the complete document.
+    
+    Supported formats:
+    - PDF (.pdf) - with image extraction
+    - Excel (.xlsx, .xlsm, .xltx, .xltm) - converted to markdown tables
+    - Word (.docx) - with image extraction
+    - CSV (.csv) - converted to markdown tables
+    - PowerPoint (.pptx) - text and images
+    - HTML (.html, .htm)
+    - Plain text (.txt, .log)
+    - Images (.jpg, .jpeg, .png) - with OCR if available
+    
+    Args:
+        path: Absolute or relative path to the file to convert.
+        output_dir: Directory where the markdown file and images will be saved.
+            If not specified, saves in the same directory as the source file.
+        output_filename: Name for the output markdown file (without extension).
+            If not specified, uses the source filename with .md extension.
+    
+    Returns:
+        Dictionary containing:
+        - markdown_path: Path to the saved markdown file (contains FULL content, not truncated)
+        - images_dir: Path to the directory containing extracted images (if any)
+        - image_count: Number of images extracted
+        - markdown_preview: First 500 characters preview (truncated for AI context protection)
+        - file_size_chars: Total character count of the saved markdown file
+    """
+    _enforce_rate_limit()
+    
+    if MarkItDown is None:
+        raise RuntimeError(
+            "markitdown is not installed. To use conversion features, install it with: "
+            "pip install markitdown"
+        )
+    
+    if not path or not isinstance(path, str):
+        raise ValueError("path must be a non-empty string")
+    
+    expanded_path = os.path.expanduser(path)
+    if not os.path.isfile(expanded_path):
+        raise FileNotFoundError(f"File not found: {expanded_path}")
+    
+    file_size = os.path.getsize(expanded_path)
+    if file_size > 100 * 1024 * 1024:
+        raise ValueError("File too large; limit is 100MB")
+    
+    # Determine output directory
+    if output_dir:
+        output_directory = os.path.expanduser(output_dir)
+    else:
+        output_directory = os.path.dirname(expanded_path)
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_directory, exist_ok=True)
+    
+    # Determine output filename
+    source_basename = os.path.basename(expanded_path)
+    source_name, _ = os.path.splitext(source_basename)
+    
+    if output_filename:
+        md_filename = output_filename if output_filename.endswith('.md') else f"{output_filename}.md"
+    else:
+        md_filename = f"{source_name}.md"
+    
+    md_path = os.path.join(output_directory, md_filename)
+    
+    # Create images directory for this document
+    images_dirname = f"{source_name}_images"
+    images_dir = os.path.join(output_directory, images_dirname)
+    
+    try:
+        # Initialize MarkItDown converter
+        converter = MarkItDown()
+        
+        # Convert the document
+        result = converter.convert(expanded_path)
+        markdown_content = result.text_content
+        
+        # Check if there are embedded images in the result
+        image_count = 0
+        if hasattr(result, 'images') and result.images:
+            os.makedirs(images_dir, exist_ok=True)
+            
+            # Save images and update references in markdown
+            for idx, img_data in enumerate(result.images):
+                img_filename = f"image_{idx + 1}.png"
+                img_path = os.path.join(images_dir, img_filename)
+                
+                # Save the image
+                with open(img_path, 'wb') as f:
+                    f.write(img_data)
+                
+                image_count += 1
+                
+                # Update markdown to reference the saved image
+                relative_img_path = f"{images_dirname}/{img_filename}"
+                # This is a simplified approach; actual implementation may vary
+                # based on how markitdown structures image references
+        
+        # If markitdown doesn't provide direct image access, check for image links in markdown
+        # and extract them if they're data URIs
+        if 'data:image' in markdown_content and image_count == 0:
+            import re
+            import base64
+            
+            # Find all data URI images
+            data_uri_pattern = r'!\[([^\]]*)\]\(data:image/([^;]+);base64,([^)]+)\)'
+            matches = re.findall(data_uri_pattern, markdown_content)
+            
+            if matches:
+                os.makedirs(images_dir, exist_ok=True)
+                
+                for idx, (alt_text, img_format, base64_data) in enumerate(matches):
+                    img_filename = f"image_{idx + 1}.{img_format}"
+                    img_path = os.path.join(images_dir, img_filename)
+                    
+                    # Decode and save the image
+                    try:
+                        img_bytes = base64.b64decode(base64_data)
+                        with open(img_path, 'wb') as f:
+                            f.write(img_bytes)
+                        
+                        image_count += 1
+                        
+                        # Replace data URI with file reference
+                        relative_img_path = f"{images_dirname}/{img_filename}"
+                        old_ref = f'![{alt_text}](data:image/{img_format};base64,{base64_data})'
+                        new_ref = f'![{alt_text}]({relative_img_path})'
+                        markdown_content = markdown_content.replace(old_ref, new_ref)
+                    except Exception as e:
+                        # If image extraction fails, continue with next image
+                        print(f"Warning: Failed to extract image {idx + 1}: {e}")
+        
+        # Save the FULL markdown content to file (no truncation)
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+        
+        # Prepare preview for return value (truncated for AI context)
+        # Only return first 500 chars as preview, plus info about size
+        original_length = len(markdown_content)
+        preview = markdown_content[:500]
+        if original_length > 500:
+            preview += f"\n\n... (truncated preview, full file has {original_length:,} characters)"
+        
+        return {
+            "markdown_path": md_path,
+            "images_dir": images_dir if image_count > 0 else None,
+            "image_count": image_count,
+            "markdown_preview": preview,
+            "file_size_chars": original_length,
+            "status": "success",
+            "message": f"Successfully converted {source_basename} to Markdown ({original_length:,} characters)"
+        }
+        
+    except Exception as e:
+        raise RuntimeError(f"Failed to convert document to Markdown: {e}") from e
 
 
 if __name__ == "__main__":

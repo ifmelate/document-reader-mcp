@@ -6,3 +6,6 @@ fastmcp>=2.0.0
 pdfminer.six>=20221105
 openpyxl>=3.1.0
 python-docx>=1.0.0
+
+# Document conversion to Markdown
+markitdown[all]>=0.0.1a2
