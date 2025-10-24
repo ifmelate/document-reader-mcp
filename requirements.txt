@@ -9,3 +9,6 @@ python-docx>=1.0.0
 
 # Document conversion to Markdown
 markitdown[all]>=0.0.1a2
+
+# PDF image extraction
+pymupdf>=1.26.0

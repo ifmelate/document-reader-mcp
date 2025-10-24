@@ -4,11 +4,15 @@ import time
 import asyncio
 import csv
 import json
+import logging
 from collections import deque
 from typing import Optional, AsyncGenerator, Deque
 from pathlib import Path
 
 from fastmcp import FastMCP
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Handle both package import and direct script execution
 try:
@@ -42,6 +46,11 @@ try:
     from markitdown import MarkItDown
 except Exception:  # pragma: no cover
     MarkItDown = None
+
+try:
+    import fitz  # PyMuPDF for image extraction from PDFs
+except Exception:  # pragma: no cover
+    fitz = None
 
 
 server = FastMCP("document-reader-mcp")
@@ -317,6 +326,85 @@ def _extract_text_from_docx(path: str) -> str:
         return _truncate_output_if_needed(text, truncated_rows=False, file_path=path)
     except Exception as e:
         raise RuntimeError(f"Failed to extract text from DOCX: {e}") from e
+
+
+def _extract_images_from_pdf(pdf_path: str, output_dir: str, images_dirname: str) -> tuple[int, str, dict]:
+    """
+    Extract images from PDF using PyMuPDF and save them to output directory.
+    
+    Args:
+        pdf_path: Path to the PDF file
+        output_dir: Directory where images directory will be created
+        images_dirname: Name of the images subdirectory
+    
+    Returns:
+        Tuple of (image_count, images_dir_path, page_to_images_dict)
+        page_to_images_dict maps page numbers to list of image filenames
+    """
+    if fitz is None:
+        # If PyMuPDF is not available, return 0 images extracted
+        return 0, "", {}
+    
+    try:
+        images_dir = os.path.join(output_dir, images_dirname)
+        image_count = 0
+        page_to_images = {}
+        
+        # Open the PDF
+        pdf_document = fitz.open(pdf_path)
+        
+        # Iterate through pages
+        for page_num in range(len(pdf_document)):
+            page = pdf_document[page_num]
+            
+            # Get list of images on the page
+            image_list = page.get_images(full=True)
+            
+            if not image_list:
+                continue
+            
+            page_images = []
+            
+            # Extract each image
+            for img_index, img_info in enumerate(image_list):
+                xref = img_info[0]  # XREF number of image
+                
+                try:
+                    # Extract the image
+                    base_image = pdf_document.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    image_ext = base_image["ext"]  # png, jpeg, etc.
+                    
+                    # Create images directory if it doesn't exist
+                    if image_count == 0:
+                        os.makedirs(images_dir, exist_ok=True)
+                    
+                    # Save the image with a meaningful name
+                    image_count += 1
+                    img_filename = f"image_{image_count}.{image_ext}"
+                    img_path = os.path.join(images_dir, img_filename)
+                    
+                    with open(img_path, "wb") as img_file:
+                        img_file.write(image_bytes)
+                    
+                    page_images.append(img_filename)
+                        
+                except Exception as img_error:
+                    # Skip images that fail to extract
+                    logger.warning(f"Failed to extract image {img_index} from page {page_num + 1}: {img_error}")
+                    continue
+            
+            if page_images:
+                page_to_images[page_num + 1] = page_images
+        
+        pdf_document.close()
+        
+        logger.info(f"Successfully extracted {image_count} images from PDF")
+        return image_count, images_dir if image_count > 0 else "", page_to_images
+        
+    except Exception as e:
+        logger.error(f"Failed to extract images from PDF: {e}", exc_info=True)
+        return 0, "", {}
 
 
 @server.tool
@@ -707,6 +795,10 @@ def convert_to_markdown(
         result = converter.convert(expanded_path)
         markdown_content = result.text_content
         
+        # Check file extension to determine if we need special image handling
+        _, ext = os.path.splitext(expanded_path)
+        ext_lower = ext.lower()
+        
         # Check if there are embedded images in the result
         image_count = 0
         if hasattr(result, 'images') and result.images:
@@ -760,7 +852,52 @@ def convert_to_markdown(
                         markdown_content = markdown_content.replace(old_ref, new_ref)
                     except Exception as e:
                         # If image extraction fails, continue with next image
-                        print(f"Warning: Failed to extract image {idx + 1}: {e}")
+                        logger.warning(f"Failed to extract data URI image {idx + 1}: {e}")
+        
+        # For PDFs, use PyMuPDF to extract images if markitdown didn't extract them
+        if ext_lower == ".pdf" and image_count == 0:
+            logger.info(f"Attempting to extract images from PDF using PyMuPDF: {expanded_path}")
+            extracted_count, extracted_dir, page_to_images = _extract_images_from_pdf(
+                expanded_path, output_directory, images_dirname
+            )
+            logger.info(f"PDF image extraction completed: {extracted_count} images extracted")
+            
+            if extracted_count > 0:
+                image_count = extracted_count
+                images_dir = extracted_dir
+                
+                # Insert images throughout the document based on page breaks
+                # Look for form feed characters (\f) which markitdown uses as page markers
+                if '\f' in markdown_content and page_to_images:
+                    # Split content by page breaks
+                    pages = markdown_content.split('\f')
+                    reconstructed_content = []
+                    
+                    for page_num, page_content in enumerate(pages, start=1):
+                        reconstructed_content.append(page_content)
+                        
+                        # If this page has images, insert them
+                        if page_num in page_to_images:
+                            reconstructed_content.append("\n\n")
+                            for img_filename in page_to_images[page_num]:
+                                relative_img_path = f"{images_dirname}/{img_filename}"
+                                reconstructed_content.append(f"![Image from page {page_num}]({relative_img_path})\n\n")
+                        
+                        # Add page break back (except for last page)
+                        if page_num < len(pages):
+                            reconstructed_content.append('\f')
+                    
+                    markdown_content = ''.join(reconstructed_content)
+                else:
+                    # Fallback: add images at the end if no page breaks found
+                    markdown_content += "\n\n## Extracted Images\n\n"
+                    markdown_content += "*The following images were extracted from the PDF:*\n\n"
+                    
+                    for page_num in sorted(page_to_images.keys()):
+                        markdown_content += f"\n### Images from Page {page_num}\n\n"
+                        for img_filename in page_to_images[page_num]:
+                            relative_img_path = f"{images_dirname}/{img_filename}"
+                            markdown_content += f"![Image]({relative_img_path})\n\n"
         
         # Save the FULL markdown content to file (no truncation)
         with open(md_path, 'w', encoding='utf-8') as f:
