@@ -13,7 +13,7 @@ Universal MCP server for extracting text from various document formats. Supports
 
 | Format | Extensions | Dependencies | Status |
 |--------|-----------|--------------|--------|
-| **PDF** | `.pdf` | `pdfminer.six` | ✅ Included |
+| **PDF** | `.pdf` | `pdfminer.six`, `pymupdf` | ✅ Included (text + images) |
 | **Excel** | `.xlsx`, `.xlsm`, `.xltx`, `.xltm` | `openpyxl` | ✅ Included |
 | **Word** | `.docx` | `python-docx` | ✅ Included |
 | **CSV** | `.csv` | Built-in | ✅ Always available |
@@ -26,6 +26,7 @@ Universal MCP server for extracting text from various document formats. Supports
 ✅ **Cross-platform**: Works on macOS, Linux, and Windows  
 ✅ **Multiple format support**: PDF, Excel, CSV, TXT, JSON, Markdown, DOCX, PowerPoint, HTML  
 ✅ **Markdown conversion**: Convert documents to Markdown with automatic image extraction  
+✅ **PDF image extraction**: Automatically extracts and embeds images from PDFs at appropriate page positions  
 ✅ **Streaming API**: Memory-efficient processing of large files  
 ✅ **Smart encoding detection**: Handles UTF-8, Latin-1, CP1252, ISO-8859-1  
 ✅ **Context-aware limits**: Automatic truncation to prevent AI context overflow  
@@ -313,7 +314,7 @@ Convert various document formats to Markdown, extracting and saving images when 
 - `message`: Human-readable status message
 
 **Supported formats:**
-- PDF (`.pdf`) - with image extraction
+- PDF (`.pdf`) - with automatic image extraction and positioning at page locations
 - Excel (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`) - converted to markdown tables
 - Word (`.docx`) - with image extraction
 - CSV (`.csv`) - converted to markdown tables
@@ -338,6 +339,7 @@ result = convert_to_markdown(
 - **Full file is saved**: The complete markdown file is saved to disk without any truncation, regardless of size
 - **Preview is truncated**: Only the preview returned to the AI is limited to 500 characters to protect context
 - **Images**: Automatically extracted from supported formats and saved in a `{filename}_images/` subdirectory, with markdown using relative paths to reference them
+- **PDF images**: Images are intelligently positioned throughout the markdown document at their corresponding page locations, making them viewable in preview
 
 ## Usage Examples
 
@@ -438,7 +440,8 @@ Text-based formats (CSV, TXT, JSON, Markdown) automatically try multiple encodin
 
 | Format | Library | Type |
 |--------|---------|------|
-| PDF | `pdfminer.six` | Included |
+| PDF (text) | `pdfminer.six` | Included |
+| PDF (images) | `pymupdf` | Included |
 | Excel | `openpyxl` | Included |
 | Word | `python-docx` | Included |
 | CSV | `csv` (stdlib) | Built-in |
@@ -474,6 +477,7 @@ Text-based formats (CSV, TXT, JSON, Markdown) automatically try multiple encodin
 
 ### Missing dependency errors
 - If you see "X is not installed" errors, reinstall dependencies: `pip install -r requirements.txt`
+- For PDF image extraction issues, ensure PyMuPDF is installed: `pip install pymupdf`
 
 ### Windows-specific issues
 
